@@ -1,3 +1,4 @@
+import base64
 import random
 from typing import List
 
@@ -93,6 +94,15 @@ def get_data_distribution_test_result(image: bytes, train_paths: set[str], nu: f
 
 def get_image_from_url(url):
     return requests.get(url).content
+
+
+def get_generated_image_bytes(generated_image_json: dict) -> bytes:
+    if "data" not in generated_image_json:
+        raise RuntimeError(f"image editor failed: {generated_image_json}")
+    image = generated_image_json["data"][0]
+    if image.get("b64_json"):
+        return base64.b64decode(image["b64_json"])
+    return get_image_from_url(image["url"])
 
 
 def get_dataset_details(dataset_id: str):

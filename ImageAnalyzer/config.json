@@ -10,7 +10,7 @@
           "pattern_index": 0,
           "column_number": 1,
           "position": 2,
-          "cardinality": 8,
+          "cardinality": 9,
           "ordered": true,
           "mapping": {
             "0": "infant",
@@ -20,7 +20,8 @@
             "4": "young adult",
             "5": "adult",
             "6": "middle aged person",
-            "7": "elderly"
+            "7": "senior",
+            "8": "elderly"
           }
         },
         {

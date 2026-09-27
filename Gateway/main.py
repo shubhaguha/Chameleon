@@ -29,6 +29,8 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+MAX_CONSECUTIVE_FAILURES = int(os.getenv("MAX_CONSECUTIVE_FAILURES", 5))
+
 
 @app.post("/v1/datasets/{dataset_id}/mups/generate/")
 async def generate_images(dataset_id: str, request: Request):
@@ -69,12 +71,12 @@ async def generate_images(dataset_id: str, request: Request):
     mup = MaximalUncoveredPattern(pattern=pattern, frequency=frequency, prompt=prompt,
                                   attributes=[Attribute(**a) for a in attributes])
     num_generated = 0
+    consecutive_failures = 0
     while num_generated < need_to_be_generated and num_generated < limit:
         try:
             if strategy == "none":
                 generated_image_json = services.generate_image(mup.prompt)
-                new_image_url = generated_image_json["data"][0]["url"]
-                final_image = services.get_image_from_url(new_image_url)
+                final_image = services.get_generated_image_bytes(generated_image_json)
                 store_outputs(mup, final_image)
                 ddt_result = True
                 mup.ddt_results.append(ddt_result)
@@ -89,8 +91,7 @@ async def generate_images(dataset_id: str, request: Request):
                 base_image = load_image(base_image_details["filename"], parent, base_image_details["is_generated"])
                 mask = services.get_mask(base_image, accuracy)
                 generated_image_json = services.edit_image(base_image, mask, mup.prompt)
-                new_image_url = json.loads(generated_image_json.decode("utf-8"))["data"][0]["url"]
-                final_image = services.get_image_from_url(new_image_url)
+                final_image = services.get_generated_image_bytes(json.loads(generated_image_json.decode("utf-8")))
                 train_image_paths = set(
                     [os.path.join(os.getenv("RESOURCES_PATH"), parent, image["filename"]) for image in
                      services.get_dataset_images(
@@ -103,8 +104,15 @@ async def generate_images(dataset_id: str, request: Request):
                 store_metadata(file_name, mup, base_image, mask)
 
             num_generated += 1
+            consecutive_failures = 0
         except Exception as e:
-            print(e)
+            logger.exception(e)
+            # keep pulled_arms index-aligned with generated_images (the UI pairs them to reward the bandit)
+            del mup.pulled_arms[len(mup.generated_images):]
+            consecutive_failures += 1
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                logger.error(f"giving up after {consecutive_failures} consecutive failures")
+                break
             sleep(1)
             continue
 
@@ -134,7 +142,8 @@ async def submit_acceptable_images(dataset_id: str, request: Request):
     pattern = data["pattern"]
     for image in images:
         if image["accepted"]:
-            services.add_image_to_dataset(dataset_id, image["name"], pattern,
+            # generated image names come back as "<dataset_id>/<file>.png"; the dataset stores only the file name
+            services.add_image_to_dataset(dataset_id, os.path.basename(image["name"]), pattern,
                                           attributes=[Attribute(**a) for a in attributes])
         if image.get("arm", None) is not None:
             services.update_ucb(image["arm"], pattern, 1 if image["accepted"] else 0)
