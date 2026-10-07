@@ -73,7 +73,7 @@ def get_mups(ds_id, threshold, dimension, cardinality_of_attributes, chosen_attr
         "ATTRIBUTES": "_".join([str(i) for i in chosen_attributes_ids]),
         "FILE": f"/datasets/{ds_id}.csv"
     }
-    cmd = f"""docker run --rm -v {os.getenv("DATASET_PATH", "/datasets/")}:/datasets/ -e {"-e ".join([f"{k}={v} " for k, v in envs.items()])} --ulimit nofile=122880:122880 {utils.assert_env_var_not_none('MUP_DOCKER_IMAGE')}"""
+    cmd = f"""docker run --rm --platform linux/amd64 -v {os.getenv("DATASET_PATH", "/datasets/")}:/datasets/ -e {"-e ".join([f"{k}={v} " for k, v in envs.items()])} --ulimit nofile=122880:122880 {utils.assert_env_var_not_none('MUP_DOCKER_IMAGE')}"""
     print(f"{cmd=}")
     output = subprocess.run(cmd, stdout=subprocess.PIPE, shell=True, text=True).stdout
     start, end = False, False
