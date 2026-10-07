@@ -1,0 +1,10 @@
+# Runs natively on macOS (Docker on macOS can't use the Apple GPU / MPS)
+torch
+diffusers
+transformers
+accelerate
+safetensors
+fastapi
+uvicorn[standard]
+python-multipart
+pillow

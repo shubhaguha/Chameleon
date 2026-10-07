@@ -106,6 +106,27 @@ A smoke run on the paper's UTKFace metadata gave: greedy, τ=200, level 2 → **
 Random at 5,384. Their MUP counts don't match either age-group cardinality, so they probably used a
 slightly different metadata file. Expect the same ordering between methods, not identical numbers.
 
+### Local inpainting backend (recommended instead of OpenAI)
+
+`InpaintServer/` runs SDXL Inpainting (`diffusers/stable-diffusion-xl-1.0-inpainting-0.1`) natively on the
+host. Docker on macOS can't reach the Apple GPU, so it runs outside the containers. It serves the same
+`/v1/images/edits` API as `ImageEditor`, so switching is one line:
+
+```bash
+InpaintServer/run.sh        # first run: Python 3.12 venv via uv (~750MB) + ~6.6GB of weights into InpaintServer/models/
+# in Gateway/.env:
+IMAGE_EDITOR_BASE_URL=http://host.docker.internal:8006
+docker compose up -d gateway
+```
+
+Unlike GPT Image models it is true inpainting: only the masked region is regenerated, and the original
+pixels outside the mask are pasted back (feathered by `INPAINT_FEATHER` px). Measured on an M5 / 24 GB:
+the model loads in ~7 s and takes **~50 s per 512 px image** (30 steps at 1024 px). It costs $0 and has no
+moderation step. On test-2's guide and mask the average change outside the mask was 0.0/255, versus 55.5/255 for
+`gpt-image-1`. Tunables: `INPAINT_STEPS`, `INPAINT_GUIDANCE`, `INPAINT_STRENGTH`,
+`INPAINT_NEGATIVE_PROMPT`, and `INPAINT_MODEL` for another diffusers inpainting checkpoint.
+`download_models.sh` uses resumable curl, because `huggingface_hub`'s Xet downloader stalled in testing.
+
 ## 3. Using a new dataset
 
 1. **Table** `datasets/<name>.csv`: column 0 is `filename`, then one integer-coded column per attribute,
@@ -131,7 +152,7 @@ slightly different metadata file. Expect the same ordering between methods, not 
 
 ## 4. Where the code differs from the paper (read before comparing numbers)
 
-* **Foundation model.** The paper used DALL·E 2 `/images/edits` at 256/512 px ($0.016/image). OpenAI shut
+* **Foundation model.** (Use the local SDXL backend above to avoid the GPT Image issues below.) The paper used DALL·E 2 `/images/edits` at 256/512 px ($0.016/image). OpenAI shut
   DALL·E 2 down on 2026-05-12. `ImageEditor` now uses `OPENAI_IMAGE_MODEL` (default `gpt-image-1`, 1024×1024,
   `quality=low`, `background=opaque`, `input_fidelity=high`). This changes the paper's results:
   * GPT Image models re-render the whole image and treat the mask only as a hint. In testing, the guide
