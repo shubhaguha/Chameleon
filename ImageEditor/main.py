@@ -27,6 +27,9 @@ def get_client() -> AsyncOpenAI:
 IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1")
 IMAGE_SIZE = os.getenv("OPENAI_IMAGE_SIZE", "1024x1024")
 IMAGE_QUALITY = os.getenv("OPENAI_IMAGE_QUALITY", "low")
+# "high" keeps more of the guide image outside the mask (GPT Image masks are only guidance); costs more input tokens.
+# Leave empty for models that don't support it (e.g. gpt-image-1-mini).
+INPUT_FIDELITY = os.getenv("OPENAI_INPUT_FIDELITY", "high")
 
 
 def _is_dall_e(model: str) -> bool:
@@ -56,6 +59,10 @@ async def edit_image(image: UploadFile, prompt: str, mask: UploadFile = None, n:
         kwargs["mask"] = _named(mask.file.read(), "mask.png")
     if not _is_dall_e(IMAGE_MODEL):
         kwargs["quality"] = IMAGE_QUALITY
+        # without this, a mask with transparent pixels can yield a transparent background
+        kwargs["background"] = "opaque"
+        if INPUT_FIDELITY:
+            kwargs["input_fidelity"] = INPUT_FIDELITY
     return _normalize(await get_client().images.edit(**kwargs))
 
 
@@ -65,4 +72,5 @@ async def generate_image(prompt: str, n: int = 4, size: str = None):
                   size=IMAGE_SIZE if not _is_dall_e(IMAGE_MODEL) else (size or "512x512"))
     if not _is_dall_e(IMAGE_MODEL):
         kwargs["quality"] = IMAGE_QUALITY
+        kwargs["background"] = "opaque"
     return _normalize(await get_client().images.generate(**kwargs))

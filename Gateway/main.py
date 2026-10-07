@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import services
 from models import MaximalUncoveredPattern, Attribute
-from utils import store_png_files, store_mup, load_image, convert_list_to_dict
+from utils import store_png_files, store_mup, load_image, convert_list_to_dict, resize_like
 
 load_dotenv()
 
@@ -91,7 +91,8 @@ async def generate_images(dataset_id: str, request: Request):
                 base_image = load_image(base_image_details["filename"], parent, base_image_details["is_generated"])
                 mask = services.get_mask(base_image, accuracy)
                 generated_image_json = services.edit_image(base_image, mask, mup.prompt)
-                final_image = services.get_generated_image_bytes(json.loads(generated_image_json.decode("utf-8")))
+                final_image = resize_like(
+                    services.get_generated_image_bytes(json.loads(generated_image_json.decode("utf-8"))), base_image)
                 train_image_paths = set(
                     [os.path.join(os.getenv("RESOURCES_PATH"), parent, image["filename"]) for image in
                      services.get_dataset_images(

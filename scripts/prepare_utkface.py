@@ -12,6 +12,12 @@ Output layout (under --data-dir, i.e. CHAMELEON_DATA_DIR):
 
 Usage:
   python3 scripts/prepare_utkface.py --src ~/Downloads/UTKFace --data-dir ./data
+
+To reproduce the paper's exact 18,978-image set (the authors applied only their size filter
+to the in-the-wild images, and their list is the ground truth):
+  docker run --rm --platform linux/amd64 --entrypoint cat merfanian/fairness-lens:0.2.1 data/images.csv > paper_images.csv
+  python3 scripts/prepare_utkface.py --src ~/Downloads/UTKFace --data-dir ./data \
+      --only-in paper_images.csv --max-aspect 100 --max-side 100000
 """
 import argparse
 import csv
@@ -54,12 +60,18 @@ def square(img: Image.Image, size: int) -> Image.Image:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", required=True, help="directory with raw UTKFace .jpg files")
+    ap.add_argument("--src", required=True, help="directory with raw UTKFace .jpg files (searched recursively)")
     ap.add_argument("--data-dir", default="data", help="CHAMELEON_DATA_DIR")
     ap.add_argument("--name", default="utkface", help="dataset name; must match config.json and contain no '_'")
     ap.add_argument("--size", type=int, default=512, help="square side in px")
     ap.add_argument("--max-aspect", type=float, default=1.5,
                     help="skip images whose long/short side ratio exceeds this (paper: 1.5)")
+    ap.add_argument("--min-side", type=int, default=256,
+                    help="skip images with a side below this (authors' preprocess_images.ipynb: 256)")
+    ap.add_argument("--max-side", type=int, default=1280,
+                    help="skip images with a side above this (authors' preprocess_images.ipynb: 1280)")
+    ap.add_argument("--only-in", help="CSV with a `filename` column; keep only those images. The authors' list is "
+                                      "/app/data/images.csv in merfanian/fairness-lens:0.2.1 (18,978 rows)")
     args = ap.parse_args()
     assert "_" not in args.name, "ImageAnalyzer derives the parent dataset from the id prefix before '_'"
 
@@ -68,25 +80,29 @@ def main():
     out_csv = Path(args.data_dir) / "datasets" / f"{args.name}.csv"
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
+    paths = sorted((os.path.join(d, f), f) for d, _, fs in os.walk(args.src) for f in fs
+                   if f.lower().endswith((".jpg", ".jpeg", ".png")) and not f.startswith("."))
+    keep = None
+    if args.only_in:
+        with open(args.only_in) as fh:
+            keep = {r["filename"] for r in csv.DictReader(fh)}
     rows, seen, skipped = [], set(), 0
-    for f in sorted(os.listdir(args.src)):
-        if not f.lower().endswith((".jpg", ".jpeg", ".png")):
-            continue
+    for path, f in paths:
         parsed = parse(f)
         if parsed is None:
             skipped += 1
             continue
         group, gender, race, date = parsed
         filename = f"{group}_{gender}_{race}_{date}.png"
-        if filename in seen:  # a few UTKFace files collide after age bucketing
+        if filename in seen or (keep is not None and filename not in keep):
             skipped += 1
             continue
-        img = Image.open(os.path.join(args.src, f)).convert("RGB")
+        img = Image.open(path)
         w, h = img.size
-        if max(w, h) / min(w, h) > args.max_aspect:
+        if min(w, h) < args.min_side or max(w, h) > args.max_side or max(w, h) / min(w, h) > args.max_aspect:
             skipped += 1
             continue
-        square(img, args.size).save(out_img / filename)
+        square(img.convert("RGB"), args.size).save(out_img / filename)
         seen.add(filename)
         rows.append((filename, group, gender, race, False))
 

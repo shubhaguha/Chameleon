@@ -2,7 +2,7 @@
   "datasets": [
     {
       "name": "utkface",
-      "prompt_prefix": "",
+      "prompt_prefix": "a realistic photo of a",
       "prompt_suffix": "",
       "attributes": [
         {
@@ -16,12 +16,12 @@
             "0": "infant",
             "1": "preschooler",
             "2": "school age child",
-            "3": "adolescents",
+            "3": "adolescent",
             "4": "young adult",
             "5": "adult",
             "6": "middle aged person",
             "7": "senior",
-            "8": "elderly"
+            "8": "elderly person"
           }
         },
         {

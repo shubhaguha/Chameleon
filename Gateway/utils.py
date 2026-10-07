@@ -1,5 +1,8 @@
+import io
 import json
 import os
+
+from PIL import Image
 
 from models import MUPEncoder
 
@@ -17,6 +20,17 @@ def store_mup(mup, filename, dir):
 
     with open(os.path.join(dir, filename), "w") as f:
         f.write(json.dumps(mup, cls=MUPEncoder))
+
+
+def resize_like(image: bytes, reference: bytes) -> bytes:
+    # the paper maps generated images back to the data set's dimensions (§6.1); GPT Image models return 1024px
+    ref_size = Image.open(io.BytesIO(reference)).size
+    img = Image.open(io.BytesIO(image)).convert("RGB")
+    if img.size != ref_size:
+        img = img.resize(ref_size, Image.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
 
 
 def load_image(filename, parent_ds, is_generated: bool):
