@@ -106,13 +106,36 @@ A smoke run on the paper's UTKFace metadata gave: greedy, τ=200, level 2 → **
 Random at 5,384. Their MUP counts don't match either age-group cardinality, so they probably used a
 slightly different metadata file. Expect the same ordering between methods, not identical numbers.
 
-### Full repair
+### Local inpainting backend (recommended instead of OpenAI)
 
-1. `docker compose up --build -d`. Rebuilding is needed for the new `ucb` and `data_distribution_tester` images.
-2. In the UI, *Create dataset* to get a working copy, then *Repair dataset* with τ (100 in the paper),
+`InpaintServer/` runs SDXL Inpainting (`diffusers/stable-diffusion-xl-1.0-inpainting-0.1`) natively on the
+host. Docker on macOS can't reach the Apple GPU, so it runs outside the containers. It serves the same
+`/v1/images/edits` API as `ImageEditor`, so switching is one line:
+
+```bash
+InpaintServer/run.sh        # first run: Python 3.12 venv via uv (~750MB) + ~6.6GB of weights into InpaintServer/models/
+# in Gateway/.env:
+IMAGE_EDITOR_BASE_URL=http://host.docker.internal:8006
+docker compose up -d gateway
+```
+
+Unlike GPT Image models it is true inpainting: only the masked region is regenerated, and the original
+pixels outside the mask are pasted back (feathered by `INPAINT_FEATHER` px). Measured on an M5 / 24 GB:
+the model loads in ~7 s and takes **~50 s per 512 px image** (30 steps at 1024 px). It costs $0 and has no
+moderation step. On test-2's guide and mask the average change outside the mask was 0.0/255, versus 55.5/255 for
+`gpt-image-1`. Tunables: `INPAINT_STEPS`, `INPAINT_GUIDANCE`, `INPAINT_STRENGTH`,
+`INPAINT_NEGATIVE_PROMPT`, and `INPAINT_MODEL` for another diffusers inpainting checkpoint.
+`download_models.sh` uses resumable curl, because `huggingface_hub`'s Xet downloader stalled in testing.
+
+### Full repair with the local backend
+
+1. Start SDXL on the host: `InpaintServer/run.sh` and leave it running.
+2. In `Gateway/.env`, set `IMAGE_EDITOR_BASE_URL=http://host.docker.internal:8006`.
+3. `docker compose up --build -d`. Rebuilding is needed for the new `ucb` and `data_distribution_tester` images.
+4. In the UI, *Create dataset* to get a working copy, then *Repair dataset* with τ (100 in the paper),
    **LinUCB**, mask **moderate**, and a batch size of 5 to 10.
-3. Repeat Repair, review, Submit and Re-evaluate until no MUPs are left. The distribution test rejects roughly
-   a third of generated images, so plan for about 1.5 generations per image that gets added.
+5. Repeat Repair, review, Submit and Re-evaluate until no MUPs are left. Each image takes about 50 s, and the
+   distribution test rejects roughly a third, so plan for about 75 s of SDXL time per image that gets added.
    The first Repair also embeds the training set (a few minutes, then cached).
 
 Bandit state and DDT embeddings live in `${CHAMELEON_DATA_DIR}/ucb/` and `ddt_cache/`. Delete
@@ -161,7 +184,7 @@ generating for a dataset once its ledger reaches that many dollars. A repair req
 
 ## 4. Where the code differs from the paper (read before comparing numbers)
 
-* **Foundation model.** The paper used DALL·E 2 `/images/edits` at 256/512 px ($0.016/image). OpenAI shut
+* **Foundation model.** (Use the local SDXL backend above to avoid the GPT Image issues below.) The paper used DALL·E 2 `/images/edits` at 256/512 px ($0.016/image). OpenAI shut
   DALL·E 2 down on 2026-05-12, and `gpt-image-1` on 2026-10-23. `ImageEditor` now uses `OPENAI_IMAGE_MODEL`
   (default `gpt-image-2.5-sunburst`, 1024×1024, `quality=low`, `background=opaque`, `input_fidelity=high`; optional
   parameters a model rejects are dropped and retried). Each call returns and logs its token usage and cost, which go into the cost ledger (§2). The tests
