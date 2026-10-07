@@ -121,8 +121,9 @@ slightly different metadata file. Expect the same ordering between methods, not 
    * `column_number` = CSV column index of the attribute.
    * `cardinality`, `mapping` (code → words used in the prompt), `position` (word order in the prompt),
      `ordered` (ordinal attributes only use ±1 siblings as similar guides).
-   * `prompt_prefix` / `prompt_suffix`: these are empty for UTKFace, so the prompt is just
-     `"indian female preschooler"`. Something like `"a realistic photo of a"` + `"person"` is likely to help GPT Image models.
+   * `prompt_prefix` / `prompt_suffix`: the prompt is `prefix + attribute words (by position) + suffix`. The
+     authors left both empty (prompt `"indian female preschooler"`). This repo sets the UTKFace prefix to
+     `"a realistic photo of a"` and uses noun age labels, giving e.g. `"a realistic photo of a black female elderly person"`.
 5. UTKFace-specific hard-coding to be aware of: `ImageAnalyzer/main.py` `get_all_combinations_status`
    (age_group/gender/race), `add_random_images_to_dataset`, `export_partial_dataset`, and
    `CombinationSelectionAnalyzer/main.py` (the random/min-gap baselines).
@@ -132,10 +133,12 @@ slightly different metadata file. Expect the same ordering between methods, not 
 
 * **Foundation model.** The paper used DALL·E 2 `/images/edits` at 256/512 px ($0.016/image). OpenAI shut
   DALL·E 2 down on 2026-05-12. `ImageEditor` now uses `OPENAI_IMAGE_MODEL` (default `gpt-image-1`, 1024×1024,
-  `quality=low`). This changes the paper's results in three ways:
-  * GPT Image masks are *guidance*, not a hard inpainting boundary, so the accurate/moderate/imprecise
-    comparison won't reproduce exactly.
-  * Outputs are 1024 px, and the code does not resize them back to the dataset size (the paper did).
+  `quality=low`, `background=opaque`, `input_fidelity=high`). This changes the paper's results:
+  * GPT Image models re-render the whole image and treat the mask only as a hint. In testing, the guide
+    photo's background and framing were not kept, so the accurate/moderate/imprecise comparison is not meaningful.
+  * OpenAI's moderation blocked an edit of an infant guide image (`moderation_blocked`, output stage). Many
+    UTKFace MUPs involve children, and the Gateway retries blocked requests like other errors.
+  * Outputs are 1024 px; the Gateway resizes them back to the guide image's size, as the paper did.
   * Cost per image is different. Check current pricing before large runs.
 * **Bandit.** The paper describes contextual *LinUCB* (one-hot context over all k combinations,
   d arms, ridge regression). The code is a non-contextual UCB1 variant:
