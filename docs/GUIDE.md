@@ -132,8 +132,10 @@ slightly different metadata file. Expect the same ordering between methods, not 
 ## 4. Where the code differs from the paper (read before comparing numbers)
 
 * **Foundation model.** The paper used DALL·E 2 `/images/edits` at 256/512 px ($0.016/image). OpenAI shut
-  DALL·E 2 down on 2026-05-12. `ImageEditor` now uses `OPENAI_IMAGE_MODEL` (default `gpt-image-1`, 1024×1024,
-  `quality=low`, `background=opaque`, `input_fidelity=high`). This changes the paper's results:
+  DALL·E 2 down on 2026-05-12, and `gpt-image-1` on 2026-10-23. `ImageEditor` now uses `OPENAI_IMAGE_MODEL`
+  (default `gpt-image-2.5-sunburst`, 1024×1024, `quality=low`, `background=opaque`, `input_fidelity=high`; optional
+  parameters a model rejects are dropped and retried). Each call logs its token usage and estimated cost. The tests
+  below were run with `gpt-image-1`. This changes the paper's results:
   * GPT Image models re-render the whole image and treat the mask only as a hint. In testing, the guide
     photo's background and framing were not kept, so the accurate/moderate/imprecise comparison is not meaningful.
   * OpenAI's moderation blocked an edit of an infant guide image (`moderation_blocked`, output stage). Many
