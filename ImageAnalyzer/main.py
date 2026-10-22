@@ -70,7 +70,7 @@ def add_image_to_dataset(dataset_id: str, file_name: str, attributes: List[str] 
 
 @app.post("/v1/images/datasets/{dataset_id}/random/")
 def add_random_images_to_dataset(dataset_id: str, gender: str, race: str, age_group: str, count: int = 1):
-    with open(f"datasets/{dataset_id}.csv", 'a') as f:
+    with open(f"/datasets/{dataset_id}.csv", 'a') as f:
         for i in range(count):
             current_time = datetime.datetime.now()
             filename = f"{age_group}_{gender}_{race}_{current_time.strftime('%Y%m%d%H%M%S%f')}_fake.png"
@@ -116,7 +116,7 @@ def get_all_combinations_status(dataset_id: str):
     manager: DatasetManager = DatasetManager.instance()
     dataset = manager.get_first_dataset()
     res = {}
-    for age_group in range(0, 8):
+    for age_group in range(0, dataset.get_attribute_by_name("age_group").cardinality):
         for gender in range(0, 2):
             for race in range(0, 4):
                 res[f"{age_group}{gender}{race}"] = csv_crud.get_images_count(dataset_id,

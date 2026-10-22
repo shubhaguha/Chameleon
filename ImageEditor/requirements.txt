@@ -6,3 +6,4 @@ python-multipart
 
 # image generation
 openai
+requests

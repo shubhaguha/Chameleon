@@ -76,9 +76,9 @@ class ImageAnalyzerConnector(Connector):
 
     def create_image(self, dataset_id: str, filename: str, attributes: dict = None):
         if attributes is None:
-            filters = {}
+            attributes = {}
         params = {"attributes": [f"{k}={v}" for k, v in attributes.items()]}
-        return self.post_form_data(f"/v1/datasets/{filename}/", params=params)
+        return self.post_form_data(f"/v1/datasets/{dataset_id}/{filename}/", params=params)
 
     def get_available_datasets(self):
         return self.get_json_data(f"/v1/datasets/")
