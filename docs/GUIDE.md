@@ -159,6 +159,24 @@ Both report queries, failures, DDT rejections, accepted images, **queries per ac
 generating for a dataset once its ledger reaches that many dollars. A repair request that hits the cap returns
 `stopped_reason`.
 
+**Compute with the local backend.** `InpaintServer` returns compute measurements as its `usage`, so the same
+ledger and report cover SDXL runs. Each query records:
+* `inference_seconds`: time in the SDXL pipeline.
+* `cpu_seconds`: process CPU time.
+* `peak_device_memory_gb`: Metal driver memory for MPS, or allocated memory for CUDA.
+* `peak_rss_gb`.
+* `settings`: resolution and steps.
+
+The Gateway's per-query `seconds` adds mask, transfer and distribution-test time on top. `peak_*` fields are reported
+as maxima, not sums. For the run as a whole, the server samples every `RESOURCE_SAMPLE_SECONDS` (default 5) into
+`InpaintServer/logs/resources_<start>.csv` (busy flag, process CPU %, RSS, device memory, system CPU and memory),
+and `curl localhost:8006/resources` reports totals since start, including utilization (the share of time spent generating).
+
+Energy isn't measured, because Apple GPU power needs `sudo powermetrics`. To put SDXL on the same dollar scale as
+OpenAI, set `INPAINT_POWER_WATTS` (the machine's draw while generating) and `ELECTRICITY_USD_PER_KWH`
+before `run.sh`. Usage then also carries `energy_kwh_est` and `cost_usd`, both labelled as estimates. To measure
+the draw once, run `sudo powermetrics --samplers cpu_power,gpu_power -i 5000` during a Repair and read *Combined Power*.
+
 ## 3. Using a new dataset
 
 1. **Table** `datasets/<name>.csv`: column 0 is `filename`, then one integer-coded column per attribute,

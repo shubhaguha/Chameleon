@@ -22,6 +22,8 @@ from diffusers import AutoencoderKL, AutoPipelineForInpainting
 from fastapi import FastAPI, UploadFile
 from PIL import Image, ImageFilter
 
+import resources
+
 MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 
@@ -66,6 +68,13 @@ def load_model():
     t = time.time()
     get_pipe()
     print(f"loaded {MODEL_ID} on {device} in {time.time() - t:.0f}s")
+    resources.start_sampler(device)
+
+
+def new_usage() -> dict:
+    # returned with every response; the Gateway writes it to the dataset's cost ledger
+    return {"backend": "sdxl", "model": os.path.basename(MODEL_ID.rstrip("/")), "device": device,
+            "settings": f"{WORK_SIZE}px, {STEPS} steps"}
 
 
 def to_inpaint_mask(mask_rgba: Image.Image) -> Image.Image:
@@ -74,12 +83,12 @@ def to_inpaint_mask(mask_rgba: Image.Image) -> Image.Image:
     return Image.fromarray(np.where(alpha < 128, 255, 0).astype(np.uint8), mode="L")
 
 
-def inpaint(image: Image.Image, mask: Image.Image, prompt: str, seed: int | None) -> Image.Image:
+def inpaint(image: Image.Image, mask: Image.Image, prompt: str, seed: int | None, usage: dict) -> Image.Image:
     size = image.size
     work_image = image.resize((WORK_SIZE, WORK_SIZE), Image.LANCZOS)
     work_mask = mask.resize((WORK_SIZE, WORK_SIZE), Image.NEAREST)
     generator = torch.Generator("cpu").manual_seed(seed) if seed is not None else None
-    with _lock:
+    with _lock, resources.measure(device, usage):
         out = get_pipe()(prompt=prompt, negative_prompt=NEGATIVE_PROMPT, image=work_image, mask_image=work_mask,
                          width=WORK_SIZE, height=WORK_SIZE, num_inference_steps=STEPS, guidance_scale=GUIDANCE,
                          strength=STRENGTH, generator=generator).images[0]
@@ -100,23 +109,31 @@ def edit_image(image: UploadFile, prompt: str, mask: UploadFile = None, n: int =
                seed: int = None):
     img = Image.open(image.file).convert("RGB")
     m = to_inpaint_mask(Image.open(mask.file)) if mask else Image.new("L", img.size, 255)
-    data = []
+    data, usage = [], new_usage()
     for i in range(n):
         t = time.time()
-        result = inpaint(img, m, prompt, None if seed is None else seed + i)
+        result = inpaint(img, m, prompt, None if seed is None else seed + i, usage)
         print(f"inpainted {img.size} in {time.time() - t:.1f}s: {prompt!r}")
         data.append({"b64_json": to_b64(result)})
-    return {"data": data}
+    return {"data": data, "usage": usage}
 
 
 @app.post("/v1/images/generations")
 def generate_image(prompt: str, n: int = 1, size: str = None, seed: int = None):
     # the paper's "no guide" baseline: inpaint a blank canvas with a full mask
     canvas, full = Image.new("RGB", (WORK_SIZE, WORK_SIZE), (127, 127, 127)), Image.new("L", (WORK_SIZE, WORK_SIZE), 255)
-    return {"data": [{"b64_json": to_b64(inpaint(canvas, full, prompt, None if seed is None else seed + i))}
-                     for i in range(n)]}
+    usage = new_usage()
+    data = [{"b64_json": to_b64(inpaint(canvas, full, prompt, None if seed is None else seed + i, usage))}
+            for i in range(n)]
+    return {"data": data, "usage": usage}
 
 
 @app.get("/health")
 def health():
     return {"model": MODEL_ID, "device": device, "loaded": _pipe is not None}
+
+
+@app.get("/resources")
+def resource_summary():
+    # totals since this server started; per-dataset numbers are in the Gateway's cost ledger
+    return {"model": MODEL_ID, "device": device, **resources.summary()}
