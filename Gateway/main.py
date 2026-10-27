@@ -2,12 +2,14 @@ import datetime
 import json
 import logging
 import os
+import time
 from time import sleep
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+import cost_ledger
 import services
 from models import MaximalUncoveredPattern, Attribute
 from utils import store_png_files, store_mup, load_image, convert_list_to_dict, resize_like
@@ -34,6 +36,8 @@ MAX_CONSECUTIVE_FAILURES = int(os.getenv("MAX_CONSECUTIVE_FAILURES", 5))
 DDT_ENABLED = os.getenv("DDT_ENABLED", "true").lower() == "true"
 DDT_NU = float(os.getenv("DDT_NU", 0.3))
 DDT_KERNEL = os.getenv("DDT_KERNEL", "rbf")
+# stop generating for a dataset once its ledger reaches this many dollars (unset = no cap)
+MAX_SPEND_USD = float(os.getenv("MAX_SPEND_USD")) if os.getenv("MAX_SPEND_USD") else None
 
 
 @app.post("/v1/datasets/{dataset_id}/mups/generate/")
@@ -90,15 +94,30 @@ async def generate_images(dataset_id: str, request: Request):
             logger.info(f"{mup.pattern}: generated image rejected by the distribution test")
         return result
 
+    def record_query(started: float, usage: dict, file_name: str | None = None, error: Exception | None = None):
+        cost_ledger.record(dataset_id, "query", pattern=mup.pattern, strategy=strategy, accuracy=accuracy,
+                           image=f"{dataset_id}/{file_name}.png" if file_name else None, ok=error is None,
+                           error=None if error is None else str(error)[:300],
+                           ddt_pass=mup.ddt_results[-1] if file_name else None,
+                           seconds=round(time.monotonic() - started, 2), usage=usage)
+
     num_generated = 0
     consecutive_failures = 0
+    stopped_reason = None
     while num_generated < need_to_be_generated and num_generated < limit:
+        if MAX_SPEND_USD is not None and cost_ledger.total_cost_usd(
+                cost_ledger.ledger_path(dataset_id)) >= MAX_SPEND_USD:
+            stopped_reason = f"spend cap MAX_SPEND_USD={MAX_SPEND_USD} reached"
+            logger.warning(f"{dataset_id}: {stopped_reason}")
+            break
+        started, usage = time.monotonic(), {}
         try:
             if strategy == "none":
                 generated_image_json = services.generate_image(mup.prompt)
+                usage = generated_image_json.get("usage") or {}
                 final_image = services.get_generated_image_bytes(generated_image_json)
                 mup.ddt_results.append(distribution_test(final_image))
-                store_outputs(mup, final_image)
+                file_name = store_outputs(mup, final_image)
             else:
                 if strategy == "similar":
                     base_image_details = services.get_mup_similar_image(dataset_id, mup)
@@ -109,14 +128,15 @@ async def generate_images(dataset_id: str, request: Request):
 
                 base_image = load_image(base_image_details["filename"], parent, base_image_details["is_generated"])
                 mask = services.get_mask(base_image, accuracy)
-                generated_image_json = services.edit_image(base_image, mask, mup.prompt)
-                final_image = resize_like(
-                    services.get_generated_image_bytes(json.loads(generated_image_json.decode("utf-8"))), base_image)
+                generated_image_json = json.loads(services.edit_image(base_image, mask, mup.prompt).decode("utf-8"))
+                usage = generated_image_json.get("usage") or {}
+                final_image = resize_like(services.get_generated_image_bytes(generated_image_json), base_image)
                 # rejected images are still stored and returned; the UI greys them out and rewards their arm 0
                 mup.ddt_results.append(distribution_test(final_image))
                 file_name = store_outputs(mup, final_image)
                 store_metadata(file_name, mup, base_image, mask)
 
+            record_query(started, usage, file_name=file_name)
             num_generated += 1
             consecutive_failures = 0
         except Exception as e:
@@ -124,6 +144,8 @@ async def generate_images(dataset_id: str, request: Request):
             # keep pulled_arms index-aligned with generated_images (the UI pairs them to reward the bandit)
             del mup.pulled_arms[len(mup.generated_images):]
             del mup.ddt_results[len(mup.generated_images):]
+            # usage is non-empty when the editor answered (and billed) before a later step failed
+            record_query(started, usage, error=e)
             consecutive_failures += 1
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 logger.error(f"giving up after {consecutive_failures} consecutive failures")
@@ -131,7 +153,8 @@ async def generate_images(dataset_id: str, request: Request):
             sleep(1)
             continue
 
-    return {"generated_images": mup.generated_images, "pulled_arms": mup.pulled_arms, "ddt_results": mup.ddt_results}
+    return {"generated_images": mup.generated_images, "pulled_arms": mup.pulled_arms, "ddt_results": mup.ddt_results,
+            "stopped_reason": stopped_reason}
 
 
 @app.get("/v1/datasets/{dataset_id}/mups/")
@@ -156,6 +179,7 @@ async def submit_acceptable_images(dataset_id: str, request: Request):
     attributes = data["attributes"]
     pattern = data["pattern"]
     for image in images:
+        cost_ledger.record(dataset_id, "review", image=image["name"], accepted=bool(image["accepted"]))
         if image["accepted"]:
             # generated image names come back as "<dataset_id>/<file>.png"; the dataset stores only the file name
             services.add_image_to_dataset(dataset_id, os.path.basename(image["name"]), pattern,
@@ -164,6 +188,11 @@ async def submit_acceptable_images(dataset_id: str, request: Request):
             services.update_ucb(dataset_id, int(image["arm"]), pattern, len(attributes),
                                 1 if image["accepted"] else 0)
     return {"success": True}
+
+
+@app.get("/v1/datasets/{dataset_id}/cost/")
+def get_cost(dataset_id: str):
+    return cost_ledger.summarize(cost_ledger.read_rows(cost_ledger.ledger_path(dataset_id)))
 
 
 @app.get("/v1/datasets/{dataset_id}/images/")

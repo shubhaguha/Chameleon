@@ -34,7 +34,8 @@ INPUT_FIDELITY = os.getenv("OPENAI_INPUT_FIDELITY", "high")
 # Optional parameters that not every GPT Image model accepts; a 400 naming one of them is retried without it
 # (rejected requests are not billed).
 OPTIONAL_PARAMS = ("background", "input_fidelity")
-# $ per 1M tokens, for the cost line in the log (gpt-image-2 / 2.5 standard rates)
+# $ per 1M tokens, for the cost returned with each response and logged (gpt-image-2 / 2.5 standard rates).
+# Check https://openai.com/api/pricing before a large run.
 PRICE_TEXT_IN = float(os.getenv("OPENAI_PRICE_TEXT_INPUT", 5.0))
 PRICE_IMAGE_IN = float(os.getenv("OPENAI_PRICE_IMAGE_INPUT", 8.0))
 PRICE_IMAGE_OUT = float(os.getenv("OPENAI_PRICE_IMAGE_OUTPUT", 30.0))
@@ -50,7 +51,8 @@ def _normalize(response) -> dict:
     for d in response.data:
         b64 = d.b64_json if d.b64_json else base64.b64encode(requests.get(d.url).content).decode("utf-8")
         data.append({"b64_json": b64})
-    return {"data": data}
+    # the Gateway writes `usage` to the dataset's cost ledger (Gateway/cost_ledger.py)
+    return {"data": data, "usage": _usage(response)}
 
 
 async def _call(fn, kwargs: dict):
@@ -65,22 +67,25 @@ async def _call(fn, kwargs: dict):
             print(f"{IMAGE_MODEL} rejected `{dropped}`; retrying without it")
             kwargs.pop(dropped)
             continue
-        _log_usage(response)
         return response
 
 
-def _log_usage(response):
-    # GPT Image responses report token usage; log it so budgets can be checked against real numbers
+def _usage(response) -> dict:
+    # GPT Image responses report token usage, so spend is computed from real numbers rather than estimated
+    usage = {"backend": "openai", "model": IMAGE_MODEL, "quality": IMAGE_QUALITY, "images": len(response.data)}
     u = getattr(response, "usage", None)
     if not u:
-        return
+        # DALL-E responses carry no usage; its per-image price isn't modelled
+        return usage
     details = getattr(u, "input_tokens_details", None)
-    text_in = getattr(details, "text_tokens", 0) or 0
-    image_in = getattr(details, "image_tokens", 0) or 0
-    out = getattr(u, "output_tokens", 0) or 0
-    cost = (text_in * PRICE_TEXT_IN + image_in * PRICE_IMAGE_IN + out * PRICE_IMAGE_OUT) / 1e6
-    print(f"usage {IMAGE_MODEL} quality={IMAGE_QUALITY}: text_in={text_in} image_in={image_in} out={out} "
-          f"~${cost:.4f}")
+    usage["text_input_tokens"] = getattr(details, "text_tokens", 0) or 0
+    usage["image_input_tokens"] = getattr(details, "image_tokens", 0) or 0
+    usage["output_tokens"] = getattr(u, "output_tokens", 0) or 0
+    usage["cost_usd"] = (usage["text_input_tokens"] * PRICE_TEXT_IN + usage["image_input_tokens"] * PRICE_IMAGE_IN +
+                         usage["output_tokens"] * PRICE_IMAGE_OUT) / 1e6
+    print(f"usage {IMAGE_MODEL} quality={IMAGE_QUALITY}: text_in={usage['text_input_tokens']} "
+          f"image_in={usage['image_input_tokens']} out={usage['output_tokens']} ~${usage['cost_usd']:.4f}")
+    return usage
 
 
 def _named(upload_bytes: bytes, name: str):
