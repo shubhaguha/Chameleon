@@ -192,7 +192,8 @@ const RepairDatasetDetails = () => {
                 // Handle success
                 console.log('Acceptable images submitted successfully.');
                 setHasSubmitted(true);
-                setCountNeeded(countNeeded - generatedImages.length + selectedImages.length)
+                // only accepted images (not deselected, passed the distribution test) reduce the gap
+                setCountNeeded(countNeeded - images.filter((img) => img.accepted).length)
                 setGeneratedImages([]);
                 setPulledArms([]);
                 setDdtResults([]);

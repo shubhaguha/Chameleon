@@ -4,3 +4,7 @@ resources/
 .idea/
 **/.ipynb_checkpoints/
 .env
+
+
+# local data (images, dataset CSVs, generated results)
+/data/

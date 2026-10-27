@@ -5,4 +5,5 @@ python-multipart
 requests
 
 scikit-learn
-mediapipe==0.10.0
+mediapipe==0.10.18  # 0.10.0 was removed from PyPI; 0.10.18 has linux/arm64 wheels
+numpy<2

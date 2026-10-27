@@ -17,11 +17,24 @@ In order to run the project using Docker, first make sure that you have `docker`
 
 Then, clone the project and specify some environment variables for each microservice to work properly. Refer to the Configuration section for more details. 
 
-You can simply run the project using this command:
+You can simply* run the project using this command:
 
 ```bash
 docker compose up --build 
 ```
+
+*First, you will need to create `.env` files, pull the MUP-finder image, and prepare a dataset.
+
+```bash
+cp .env.example .env                           # set CHAMELEON_DATA_DIR (absolute path)
+cp Gateway/.env-example Gateway/.env
+cp ImageAnalyzer/.env-example ImageAnalyzer/.env
+cp ImageEditor/.env-example ImageEditor/.env   # add OPENAI_API_KEY
+docker pull merfanian/fairness-lens:0.2.1
+python3 scripts/prepare_utkface.py --src /path/to/UTKFace --data-dir ./data
+```
+
+See [docs/GUIDE.md](docs/GUIDE.md) for how the code maps to the paper, how to reproduce the experiments, how to add a new dataset, and where the code differs from the paper (including the DALL·E 2 retirement).
 
 ### 🛠️ Run Project from Scratch
 

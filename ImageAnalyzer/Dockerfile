@@ -1,8 +1,8 @@
 FROM tiangolo/uvicorn-gunicorn-fastapi:python3.10
 
-
-RUN apt-get update && \
-    apt-get install -y docker.io
+# Only the docker CLI is needed (it talks to the host daemon through the mounted docker.sock).
+# Debian's docker.io client is too old for Docker Engine >= 29 (minimum API 1.44).
+COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 
 WORKDIR /app
 COPY ./requirements.txt /app/requirements.txt
