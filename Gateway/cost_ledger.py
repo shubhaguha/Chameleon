@@ -4,7 +4,7 @@ The paper counts repair cost in foundation-model queries. Every query is paid fo
 later rejected by the distribution test or a reviewer, so the ledger records every attempt. Each query row carries
 the `usage` dict the image editor returned: OpenAI token counts and `cost_usd` from ImageEditor, or compute
 measurements from another backend. Numeric usage fields are summed generically, so a backend can add fields
-without changes here.
+without changes here. Fields named `peak_*` are maxima instead (e.g. peak memory), and aren't divided per image.
 
 Rows live in <GENERATION_PATH>/<dataset_id>/cost_ledger.jsonl:
   {"kind": "query", "ts", "pattern", "strategy", "accuracy", "image", "ok", "error", "ddt_pass", "seconds", "usage"}
@@ -44,11 +44,11 @@ def total_cost_usd(path: str) -> float:
 def _add_usage(totals: dict, usage: dict):
     for k, v in (usage or {}).items():
         if isinstance(v, (int, float)) and not isinstance(v, bool):
-            totals[k] = totals.get(k, 0) + v
+            totals[k] = max(totals.get(k, 0), v) if k.startswith("peak_") else totals.get(k, 0) + v
 
 
 def _per(totals: dict, n: int) -> dict:
-    return {k: v / n for k, v in totals.items()} if n else {}
+    return {k: v / n for k, v in totals.items() if not k.startswith("peak_")} if n else {}
 
 
 def _new_group():
