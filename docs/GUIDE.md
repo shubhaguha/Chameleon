@@ -22,12 +22,12 @@ threshold τ, Chameleon generates the fewest synthetic images needed so that eve
 | (2) Combination selection: among the lowest-level MUPs, find the full combination that hits the most of them (tree + bit-vector inverted index) and generate `γ = min gap` images of it | §4, Alg. 1, Thm. 1 | [ImageAnalyzer/main.py:129](../ImageAnalyzer/main.py:129) (`get_best_mup`) and [ImageAnalyzer/greedy_mup_selector.py:66](../ImageAnalyzer/greedy_mup_selector.py:66). Picking the hit MUP with the **largest count** gives the smallest gap γ. The loop in Alg. 1 is spread across UI rounds: the UI calls `/mups/` again once the chosen MUP is satisfied |
 | (3a) Random guide | §5.1 | `strategy="random"` → [Gateway/services.py](../Gateway/services.py) `get_random_image` |
 | (3b) Similar-tuple guide: siblings differing in one attribute (±1 for ordinal attributes), weighted by count, excluding the target combination itself | §5.2 | `strategy="similar"` → [Gateway/services.py:23](../Gateway/services.py:23), [Gateway/models.py:80](../Gateway/models.py:80) |
-| (3c) Bandit guide: arm = which attribute to change | §5.3, Alg. 2 | `strategy="ucb"` → [Gateway/services.py:33](../Gateway/services.py:33) plus the `UCB/` service. **Differs from the paper, see §4 below** |
+| (3c) Bandit guide: arm = which attribute to change | §5.3, Alg. 2 | `strategy="ucb"` → `get_mup_ucb` in [Gateway/services.py](../Gateway/services.py) plus the `UCB/` service: disjoint LinUCB, context = the combination being repaired (one-hot), reward = 1 if the image passes both tests. Was non-contextual UCB1 in the published code, see §5 |
 | (3d) No guide (baseline) | Table 4 | `strategy="none"`: plain text-to-image |
 | (4) Mask: rembg foreground, inverted so the **person** is regenerated and the background kept. *Accurate* = exact silhouette, *moderate* = silhouette + circles of radius 10% of width, *imprecise* = bounding box | §5.4, Fig. 2 | [MaskGenerator/main.py:19](../MaskGenerator/main.py:19). The inversion is a monkey-patch in `invert_remover.py` (importing it swaps rembg's trimap) |
 | (5) Foundation model: prompt = `prompt_prefix + combination words + prompt_suffix`; word order is set by `position` in `config.json` | §2.2 | [ImageEditor/main.py](../ImageEditor/main.py) |
 | (6a) Quality test: humans flag "unrealistic" images | §3.2 | In the UI, you click the unrealistic images, then Submit → [Gateway/main.py:138](../Gateway/main.py:138) appends the accepted ones to the dataset CSV (`is_generated=True`) and sends reward 1/0 to the bandit. The multi-rater t-test (p = 0.86) was done offline with `Verifier/` and the notebooks in `NIQE/notebooks/` |
-| (6b) Distribution test: one-class SVM on image embeddings | §3.1 | `DataDistributionTester/` (MediaPipe embedder + sklearn `OneClassSVM`). **Disabled in the published code**: `ddt_result = True` at [Gateway/main.py:101](../Gateway/main.py:101) |
+| (6b) Distribution test: one-class SVM on image embeddings | §3.1 | `DataDistributionTester/` (MediaPipe embedder + sklearn `OneClassSVM`, ν = 0.3, RBF by default), called for every generated image from [Gateway/main.py](../Gateway/main.py). Rejected images are greyed out in the UI, never added, and give reward 0. Was disabled in the published code, see §5 |
 
 ### Experiments and where they live
 
@@ -106,6 +106,18 @@ A smoke run on the paper's UTKFace metadata gave: greedy, τ=200, level 2 → **
 Random at 5,384. Their MUP counts don't match either age-group cardinality, so they probably used a
 slightly different metadata file. Expect the same ordering between methods, not identical numbers.
 
+### Full repair
+
+1. `docker compose up --build -d`. Rebuilding is needed for the new `ucb` and `data_distribution_tester` images.
+2. In the UI, *Create dataset* to get a working copy, then *Repair dataset* with τ (100 in the paper),
+   **LinUCB**, mask **moderate**, and a batch size of 5 to 10.
+3. Repeat Repair, review, Submit and Re-evaluate until no MUPs are left. The distribution test rejects roughly
+   a third of generated images, so plan for about 1.5 generations per image that gets added.
+   The first Repair also embeds the training set (a few minutes, then cached).
+
+Bandit state and DDT embeddings live in `${CHAMELEON_DATA_DIR}/ucb/` and `ddt_cache/`. Delete
+`ucb/linucb.pkl` to start the bandit fresh for a new experiment.
+
 ## 3. Using a new dataset
 
 1. **Table** `datasets/<name>.csv`: column 0 is `filename`, then one integer-coded column per attribute,
@@ -142,14 +154,12 @@ slightly different metadata file. Expect the same ordering between methods, not 
     UTKFace MUPs involve children, and the Gateway retries blocked requests like other errors.
   * Outputs are 1024 px; the Gateway resizes them back to the guide image's size, as the paper did.
   * Cost per image is different. Check current pricing before large runs.
-* **Bandit.** The paper describes contextual *LinUCB* (one-hot context over all k combinations,
-  d arms, ridge regression). The code is a non-contextual UCB1 variant:
-  * Context is ignored (`ignore_input_combination = True` in [UCB/ucb.py:6](../UCB/ucb.py:6), and the Gateway passes combination `0`).
-  * `UCB/config.json` has `num_arms: 2`, so with 3 attributes the race arm is never pulled.
-  * The reward update is not a correct running mean.
-  * The state is pickled only on graceful shutdown, so it resets if the container is killed.
-* **Distribution test** is off. To enable it, `docker compose --profile ddt up` and restore the commented
-  call at [Gateway/main.py:101](../Gateway/main.py:101). The paper uses ν = 0.3 with linear and RBF kernels. The code defaults are ν = 0.5, linear.
+* **Bandit exploration α.** The paper doesn't give α. `UCB/config.json` uses α = 1, the usual choice for
+  rewards in [0, 1]. The published config had `alpha: 100`, which the old code never read; with it, LinUCB
+  would explore almost uniformly for thousands of pulls.
+* **Distribution test kernel.** The paper reports ν = 0.3 with both linear and RBF kernels. Pick one with
+  `DDT_KERNEL` in `Gateway/.env` (default `rbf`), or set `DDT_ENABLED=false` to turn the test off. With ν = 0.3 the
+  SVM treats about 30% of its own training images as outliers, so expect a similar share of generated images to be rejected.
 * **Quality test** in the UI is one rater with a binary accept. The paper's t-test across raters (α = 0.1/0.4) was offline.
 * The `/examine-dataset` UI page calls `/v1/images/sample/`, which lives in `Verifier/`, not the Gateway.
   That service isn't in `docker-compose.yml` and needs its own CSVs.
@@ -159,7 +169,7 @@ slightly different metadata file. Expect the same ordering between methods, not 
 * `docker-compose.yml`:
   * Hard-coded `/home/mahdi/...` paths replaced by `CHAMELEON_DATA_DIR`.
   * Added a `/results` volume (generated images used to be lost with the container).
-  * Added the ImageEditor `.env`, a u2net cache volume, and the DDT service behind a profile (no arm64 wheel for mediapipe 0.10.0).
+  * Added the ImageEditor `.env` and a u2net cache volume.
 * `Gateway/.env-example`: fixed the `data_ditribution_tester` hostname typo.
 * ImageAnalyzer:
   * Now uses the current docker CLI. Debian's `docker.io` client is rejected by Docker Engine ≥ 29.
@@ -170,4 +180,14 @@ slightly different metadata file. Expect the same ordering between methods, not 
   * Output directories were created with non-recursive `mkdir`.
   * The generation loop retried forever on any error. It now gives up after `MAX_CONSECUTIVE_FAILURES` (default 5).
   * Failed attempts left extra entries in `pulled_arms`, so bandit rewards went to the wrong arms.
+* **Aligned with the paper:**
+  * Bandit: the published `UCB/` was a non-contextual UCB1. It ignored the combination (the Gateway always sent `0`),
+    `num_arms: 2` meant the race arm was never pulled, its mean update was wrong, and its state was saved only on clean
+    shutdown. It is now disjoint LinUCB (§5.3) with one bandit per dataset. There is one arm per attribute, and
+    arms with no non-empty sibling combination are skipped. State is saved to `${CHAMELEON_DATA_DIR}/ucb/` after every update.
+  * Distribution test: it was commented out (`ddt_result = True`), and `mediapipe==0.10.0` has been removed from
+    PyPI, so the service couldn't be built. It is now on by default with `mediapipe==0.10.18`, which runs natively on
+    arm64. Training embeddings are cached in `${CHAMELEON_DATA_DIR}/ddt_cache/` and the SVM is fitted once
+    per training set (a few minutes for all of UTKFace on first use; later runs load the cache).
+  * UI: images rejected by the distribution test were counted as added when the remaining count was updated.
 * ImageEditor: moved to GPT Image models (base64 responses). It also now starts without an API key.

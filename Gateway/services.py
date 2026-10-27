@@ -31,11 +31,17 @@ def get_mup_similar_image(dataset_id: str, mup: MaximalUncoveredPattern):
 
 
 def get_mup_ucb(dataset_id: str, mup: MaximalUncoveredPattern):
+    parent = dataset_id.strip().split("_").pop(0)
+    similar_patterns = get_similar_patterns(dataset_id, mup)
+    # only offer arms (attributes to change) that have at least one non-empty sibling combination
+    allowed_arms = sorted({i for i in range(mup.num_attributes) for sp in similar_patterns
+                           if sp.frequency > 0 and sp.pattern[i] != mup.pattern[i]})
+    if not allowed_arms:
+        raise RuntimeError(f"no non-empty combination differs from {mup.pattern} in one attribute")
     ucb_connector = UCBConnector()
-    # TODO: don't ignore combination here
-    arm = ucb_connector.get_arm(0)["arm"]
-    similar_patterns = get_similar_patterns(dataset_id, mup, arm)
-    choice: Pattern = random.choices(similar_patterns, weights=[sp.frequency for sp in similar_patterns])[0]
+    arm = ucb_connector.get_arm(parent, mup.pattern, mup.num_attributes, allowed_arms)["arm"]
+    candidates = [sp for sp in similar_patterns if sp.pattern[arm] != mup.pattern[arm]]
+    choice: Pattern = random.choices(candidates, weights=[sp.frequency for sp in candidates])[0]
     mup.chosen_similar_pattern = choice
     mup.pulled_arms.append(arm)
     ia_connector = ImageAnalyzerConnector()
@@ -45,10 +51,10 @@ def get_mup_ucb(dataset_id: str, mup: MaximalUncoveredPattern):
     return res
 
 
-def update_ucb(arm: str, combination: str, reward: int):
+def update_ucb(dataset_id: str, arm: int, pattern: str, num_arms: int, reward: int):
+    parent = dataset_id.strip().split("_").pop(0)
     connector = UCBConnector()
-    # TODO: don't ignore combination here
-    return connector.update_arm(arm, 0, reward)
+    return connector.update_arm(parent, pattern, num_arms, arm, reward)
 
 
 def get_random_image(dataset_id: str):
@@ -85,8 +91,8 @@ def generate_image(prompt, size="256x256", n=1):
     return connector.generate_image(prompt, size=size, n=n)
 
 
-def get_data_distribution_test_result(image: bytes, train_paths: set[str], nu: float = 0.5,
-                                      kernel: str = "linear"):
+def get_data_distribution_test_result(image: bytes, train_paths: set[str], nu: float = 0.3,
+                                      kernel: str = "rbf"):
     connector = DataDistributionTesterConnector()
     res = connector.get_data_distribution_test_result(train_paths=train_paths, image=image, nu=nu, kernel=kernel)
     return res

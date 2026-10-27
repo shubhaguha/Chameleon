@@ -48,18 +48,20 @@ services:
       context: ./UCB
     ports:
       - "8004:80"
+    volumes:
+      # bandit state, saved after every update
+      - ${CHAMELEON_DATA_DIR}/ucb:/state
 
-  # The data distribution test is disabled in Gateway/main.py (as in the published code),
-  # so this service is opt-in: `docker compose --profile ddt up --build`
+  # rejects generated images that fall outside the training distribution (paper §3)
   data_distribution_tester:
-    profiles: ["ddt"]
-    platform: linux/amd64  # mediapipe==0.10.0 has no linux/arm64 wheel
     build:
       context: ./DataDistributionTester
     ports:
       - "8005:80"
     volumes:
       - ${CHAMELEON_DATA_DIR}/resources:/resources:ro
+      # embeddings of the training images, computed once per dataset
+      - ${CHAMELEON_DATA_DIR}/ddt_cache:/cache
 
   ui:
     build:

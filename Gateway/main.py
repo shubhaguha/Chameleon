@@ -30,6 +30,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MAX_CONSECUTIVE_FAILURES = int(os.getenv("MAX_CONSECUTIVE_FAILURES", 5))
+# distribution test (paper §3.1): a one-class SVM over image embeddings rejects out-of-distribution images
+DDT_ENABLED = os.getenv("DDT_ENABLED", "true").lower() == "true"
+DDT_NU = float(os.getenv("DDT_NU", 0.3))
+DDT_KERNEL = os.getenv("DDT_KERNEL", "rbf")
 
 
 @app.post("/v1/datasets/{dataset_id}/mups/generate/")
@@ -70,6 +74,22 @@ async def generate_images(dataset_id: str, request: Request):
 
     mup = MaximalUncoveredPattern(pattern=pattern, frequency=frequency, prompt=prompt,
                                   attributes=[Attribute(**a) for a in attributes])
+    train_image_paths = set()
+    if DDT_ENABLED:
+        train_image_paths = set(
+            [os.path.join(os.getenv("RESOURCES_PATH"), parent, image["filename"]) for image in
+             services.get_dataset_images(
+                 dataset_id=parent if use_parent_for_embeddings else dataset_id, is_generated=False)])
+
+    def distribution_test(image: bytes) -> bool:
+        if not DDT_ENABLED:
+            return True
+        result = services.get_data_distribution_test_result(image, train_paths=train_image_paths, nu=DDT_NU,
+                                                             kernel=DDT_KERNEL)["prediction"]
+        if not result:
+            logger.info(f"{mup.pattern}: generated image rejected by the distribution test")
+        return result
+
     num_generated = 0
     consecutive_failures = 0
     while num_generated < need_to_be_generated and num_generated < limit:
@@ -77,9 +97,8 @@ async def generate_images(dataset_id: str, request: Request):
             if strategy == "none":
                 generated_image_json = services.generate_image(mup.prompt)
                 final_image = services.get_generated_image_bytes(generated_image_json)
+                mup.ddt_results.append(distribution_test(final_image))
                 store_outputs(mup, final_image)
-                ddt_result = True
-                mup.ddt_results.append(ddt_result)
             else:
                 if strategy == "similar":
                     base_image_details = services.get_mup_similar_image(dataset_id, mup)
@@ -93,14 +112,8 @@ async def generate_images(dataset_id: str, request: Request):
                 generated_image_json = services.edit_image(base_image, mask, mup.prompt)
                 final_image = resize_like(
                     services.get_generated_image_bytes(json.loads(generated_image_json.decode("utf-8"))), base_image)
-                train_image_paths = set(
-                    [os.path.join(os.getenv("RESOURCES_PATH"), parent, image["filename"]) for image in
-                     services.get_dataset_images(
-                         dataset_id=parent if use_parent_for_embeddings else dataset_id, is_generated=False)])
-                # ddt_result = services.get_data_distribution_test_result(final_image, train_paths=train_image_paths)[
-                #     "prediction"]
-                ddt_result = True
-                mup.ddt_results.append(ddt_result)
+                # rejected images are still stored and returned; the UI greys them out and rewards their arm 0
+                mup.ddt_results.append(distribution_test(final_image))
                 file_name = store_outputs(mup, final_image)
                 store_metadata(file_name, mup, base_image, mask)
 
@@ -110,6 +123,7 @@ async def generate_images(dataset_id: str, request: Request):
             logger.exception(e)
             # keep pulled_arms index-aligned with generated_images (the UI pairs them to reward the bandit)
             del mup.pulled_arms[len(mup.generated_images):]
+            del mup.ddt_results[len(mup.generated_images):]
             consecutive_failures += 1
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 logger.error(f"giving up after {consecutive_failures} consecutive failures")
@@ -147,7 +161,8 @@ async def submit_acceptable_images(dataset_id: str, request: Request):
             services.add_image_to_dataset(dataset_id, os.path.basename(image["name"]), pattern,
                                           attributes=[Attribute(**a) for a in attributes])
         if image.get("arm", None) is not None:
-            services.update_ucb(image["arm"], pattern, 1 if image["accepted"] else 0)
+            services.update_ucb(dataset_id, int(image["arm"]), pattern, len(attributes),
+                                1 if image["accepted"] else 0)
     return {"success": True}
 
 

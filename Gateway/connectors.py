@@ -127,12 +127,12 @@ class UCBConnector(Connector):
     def __init__(self):
         super().__init__(os.getenv("UCB_BASE_URL"))
 
-    def get_arm(self, input_combination: int):
-        params = {"input_combination": input_combination}
+    def get_arm(self, dataset: str, context: str, num_arms: int, allowed_arms: list[int] | None = None):
+        params = {"dataset": dataset, "context": context, "num_arms": num_arms, "allowed_arms": allowed_arms}
         return self.get_json_data("/v1/ucb/arms/", params=params)
 
-    def update_arm(self, arm: str, combination: int, reward: int):
-        params = {"arm": arm, "combination": combination, "reward": reward}
+    def update_arm(self, dataset: str, context: str, num_arms: int, arm: int, reward: int):
+        params = {"dataset": dataset, "context": context, "num_arms": num_arms, "arm": arm, "reward": reward}
         return self.post_form_data("/v1/ucb/arms/", params=params)
 
 
@@ -140,7 +140,7 @@ class DataDistributionTesterConnector(Connector):
     def __init__(self):
         super().__init__(os.getenv("DATA_DISTRIBUTION_TESTER_URL"))
 
-    def get_data_distribution_test_result(self, train_paths, image, nu: float = 0.4, kernel: str = "rbf"):
+    def get_data_distribution_test_result(self, train_paths, image, nu: float = 0.3, kernel: str = "rbf"):
         params = {
             'nu': nu,
             'kernel': kernel,
